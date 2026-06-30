@@ -100,6 +100,7 @@ def convert_to_fp8_scaled(
     lora_save_path: Optional[str] = None,
     # Added for CLI compatibility
     lora_output: Optional[str] = None,
+    cpu_svd: bool = False,
     **converter_kwargs,
 ):
     # Ensure filter_flags is a dict
@@ -209,6 +210,7 @@ def convert_to_fp8_scaled(
         """
         kwargs = converter_kwargs.copy()
         kwargs["target_format"] = fmt
+        kwargs["cpu_svd"] = cpu_svd
 
         # Custom/fallback should NOT inherit global no_learned_rounding
         # They use their own --custom-simple / --fallback-simple flags

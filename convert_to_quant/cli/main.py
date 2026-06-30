@@ -329,6 +329,10 @@ def get_parser() -> MultiHelpArgumentParser:
         "--early-stop-stall", "--early_stop_stall", "-esstall", type=int, default=2000, dest="early_stop_stall",
         help="Early stop when worse_loss_counter exceeds this. (default: 1000)"
     )
+    parser.add_argument(
+        "--cpu-svd", "--cpu_svd", action="store_true", dest="cpu_svd",
+        help="Force SVD computation to CPU to avoid ROCm/PyTorch crashes."
+    )
     # NVFP4 scale optimization (--help-advanced)
     parser.add_argument(
         "--scale-refinement", "--scale_refinement", type=int, default=1, dest="scale_refinement_rounds",
@@ -682,6 +686,7 @@ def run_conversion(args):
                 early_stop_loss=args.early_stop_loss,
                 early_stop_lr=args.early_stop_lr,
                 early_stop_stall=args.early_stop_stall,
+                cpu_svd=args.cpu_svd,
                 # Scale optimization
                 scale_refinement_rounds=args.scale_refinement_rounds,
                 scale_optimization=args.scale_optimization,
@@ -795,6 +800,7 @@ def run_conversion(args):
                 early_stop_loss=args.early_stop_loss,
                 early_stop_lr=args.early_stop_lr,
                 early_stop_stall=args.early_stop_stall,
+                cpu_svd=args.cpu_svd,
                 # Scale optimization
                 scale_refinement_rounds=args.scale_refinement_rounds,
                 scale_optimization=args.scale_optimization,
@@ -1090,6 +1096,7 @@ def run_conversion(args):
         early_stop_loss=args.early_stop_loss,
         early_stop_lr=args.early_stop_lr,
         early_stop_stall=args.early_stop_stall,
+        cpu_svd=args.cpu_svd,
         # Scale optimization
         scale_optimization=args.scale_optimization,
         # Prodigy specific

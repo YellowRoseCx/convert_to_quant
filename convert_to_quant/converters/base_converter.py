@@ -66,6 +66,7 @@ class BaseLearnedConverter(ABC):
         lora_target: Optional[str] = None,
         lora_ar_threshold: float = 0.0,
         use_speed: bool = False,
+        cpu_svd: bool = False,
         **kwargs,
     ):
         """
@@ -94,6 +95,7 @@ class BaseLearnedConverter(ABC):
             early_stop_lr: Stop when LR drops below this
             early_stop_stall: Stop after this many steps without improvement
             device: Device to use for optimization (default: auto-detect)
+            cpu_svd: Force SVD computation to CPU to avoid ROCm/PyTorch crashes
             **kwargs: Additional optimizer-specific parameters (e.g., lr)
         """
         if device is not None:
@@ -106,6 +108,13 @@ class BaseLearnedConverter(ABC):
         self.min_k = min_k
         self.max_k = max_k
         self.full_matrix = full_matrix
+
+        self.cpu_svd = cpu_svd
+        # Auto-detect HIP/ROCm to enable cpu_svd by default to prevent hard crashes
+        if not self.cpu_svd and getattr(torch.version, 'hip', None) is not None:
+            from ..utils.logging import warning
+            warning("      [SVD] ROCm/HIP detected. Automatically enabling --cpu-svd to prevent PyTorch segmentation faults.")
+            self.cpu_svd = True
 
         # Optimizer configuration
         self.optimizer_choice = optimizer
@@ -240,8 +249,17 @@ class BaseLearnedConverter(ABC):
                 return None
 
             try:
+                # Force to CPU if requested (avoids ROCm/PyTorch crashes)
+                svd_device = "cpu" if self.cpu_svd else error.device
+                error_svd = error.to(svd_device) if svd_device != error.device else error
+
                 # Use svd_lowrank for efficiency
-                U, S, V = torch.svd_lowrank(error, q=actual_rank, niter=4)
+                U, S, V = torch.svd_lowrank(error_svd, q=actual_rank, niter=4)
+
+                # Move back to original device if needed before further ops
+                U = U.to(error.device)
+                S = S.to(error.device)
+                V = V.to(error.device)
 
                 # LoRA Up = U * diag(S)
                 # LoRA Down = V^T
@@ -275,20 +293,28 @@ class BaseLearnedConverter(ABC):
         if verbose:
             print(f"    - Tensor shape: [{M}, {N}], Max rank: {max_rank}. Using k={k} components.")
 
+        # Force to CPU if requested (avoids ROCm/PyTorch crashes)
+        svd_device = "cpu" if self.cpu_svd else W_float32.device
+        W_svd = W_float32.to(svd_device) if svd_device != W_float32.device else W_float32
+
         if self.full_matrix:
             if verbose:
                 print("    - Using torch.linalg.svd with full_matrices=True")
-            U, _, Vh = torch.linalg.svd(W_float32, full_matrices=True, driver="gesvd")
+            U, _, Vh = torch.linalg.svd(W_svd, full_matrices=True, driver="gesvd")
         else:
             try:
                 if verbose:
                     print("    - Trying svd_lowrank")
-                U, _, Vh = torch.svd_lowrank(W_float32, q=min(k + 10, max_rank), niter=4)
+                U, _, Vh = torch.svd_lowrank(W_svd, q=min(k + 10, max_rank), niter=4)
                 Vh = Vh.T
             except RuntimeError:
                 if verbose:
                     print("    - svd_lowrank failed, falling back to full SVD.")
-                U, _, Vh = torch.linalg.svd(W_float32, full_matrices=False)
+                U, _, Vh = torch.linalg.svd(W_svd, full_matrices=False)
+
+        # Move back to original device if needed
+        U = U.to(W_float32.device)
+        Vh = Vh.to(W_float32.device)
 
         return U[:, :k], Vh[:k, :], k
 
