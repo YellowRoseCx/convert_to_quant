@@ -47,6 +47,12 @@ def transfer_to_gpu_pinned(tensor: torch.Tensor, device: str = "cuda", dtype: Op
             return tensor.to(device=device, dtype=dtype)
         return tensor.to(device=device)
 
+    # Disable pinned memory on ROCm due to unstable HIP DMA causing segfaults
+    if getattr(torch.version, 'hip', None) is not None:
+        if dtype is not None:
+            return tensor.to(device=device, dtype=dtype)
+        return tensor.to(device=device)
+
     try:
         pinned = tensor.pin_memory()
 
