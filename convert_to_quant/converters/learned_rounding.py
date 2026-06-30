@@ -157,7 +157,7 @@ class LearnedRoundingConverter(BaseLearnedConverter):
             current_dq = W_q_refined / scale
             error = current_dq - W_float32
             projected_error = U_k.T @ error @ Vh_k.T
-            loss = torch.linalg.norm(projected_error)
+            loss = projected_error.pow(2).sum().sqrt()
 
             loss.backward()
             optimizer.step()
@@ -280,7 +280,7 @@ class LearnedRoundingConverter(BaseLearnedConverter):
             current_dq = W_q_refined / scale
             error = current_dq - W_float32
             projected_error = U_k.T @ error @ Vh_k.T
-            loss = torch.linalg.norm(projected_error)
+            loss = projected_error.pow(2).sum().sqrt()
 
             loss.backward()
             optimizer.step()
@@ -407,7 +407,7 @@ class LearnedRoundingConverter(BaseLearnedConverter):
             current_dq = W_q_refined / scale
             error = current_dq - W_float32
             projected_error = U_k.T @ error @ Vh_k.T
-            loss = torch.linalg.norm(projected_error)
+            loss = projected_error.pow(2).sum().sqrt()
 
             loss.backward()
             optimizer.step()
@@ -551,7 +551,7 @@ class LearnedRoundingConverter(BaseLearnedConverter):
                 current_dq = W_q_refined / scale
                 error = current_dq - W_float32
                 projected_error = U_k.T @ error @ Vh_k.T
-                loss = torch.linalg.norm(projected_error)
+                loss = projected_error.pow(2).sum().sqrt()
 
             current_loss = loss.item()
             # Check if improvement exceeds threshold (supports rel/abs mode like PyTorch ReduceLROnPlateau)
@@ -1097,7 +1097,7 @@ class LearnedRoundingConverter(BaseLearnedConverter):
             init_W_q_rounded = qdata.to(COMPUTE_DTYPE)
             init_W_rounded_dequant = init_W_q_rounded * scale_broadcast
             init_mse_rounded = torch.nn.functional.mse_loss(X_rot @ init_W_rounded_dequant.T, Y_ref)
-            init_svd_rounded = torch.linalg.norm(U_k.T @ (init_W_rounded_dequant - W_float32) @ Vh_k.T)
+            init_svd_rounded = (U_k.T @ (init_W_rounded_dequant - W_float32) @ Vh_k.T).pow(2).sum().sqrt()
 
         # Regularization balance factor: ~5% of initial rounded MSE loss
         lambda_reg = 0.05 * max(init_mse_rounded.item(), 1e-5)
@@ -1140,7 +1140,7 @@ class LearnedRoundingConverter(BaseLearnedConverter):
             # Loss 2: SVD-guided weight-space projection error (soft)
             weight_error = W_dequant - W_float32
             projected_error = U_k.T @ weight_error @ Vh_k.T
-            loss_svd = torch.linalg.norm(projected_error)
+            loss_svd = projected_error.pow(2).sum().sqrt()
 
             # Loss 3: Soft rounding binary regularizer
             loss_reg = (1.0 - (2.0 * h_V - 1.0).pow(2)).mean()
@@ -1352,7 +1352,7 @@ class LearnedRoundingConverter(BaseLearnedConverter):
 
             error = current_dq - W_float32
             projected_error = U_k.T @ error @ Vh_k.T
-            loss = torch.linalg.norm(projected_error)
+            loss = projected_error.pow(2).sum().sqrt()
 
             loss.backward()
             optimizer.step()
@@ -1486,7 +1486,7 @@ class LearnedRoundingConverter(BaseLearnedConverter):
 
             error = current_dq - W_float32
             projected_error = U_k.T @ error @ Vh_k.T
-            loss = torch.linalg.norm(projected_error)
+            loss = projected_error.pow(2).sum().sqrt()
 
             loss.backward()
             optimizer.step()
@@ -1626,7 +1626,7 @@ class LearnedRoundingConverter(BaseLearnedConverter):
 
             error = current_dq - W_float32
             projected_error = U_k.T @ error @ Vh_k.T
-            loss = torch.linalg.norm(projected_error)
+            loss = projected_error.pow(2).sum().sqrt()
 
             loss.backward()
             optimizer.step()
@@ -1757,7 +1757,7 @@ class LearnedRoundingConverter(BaseLearnedConverter):
                     raise ValueError(f"Unsupported scaling mode for INT8 learned rounding: {scaling_mode}")
                 error = current_dq - W_float32
                 projected_error = U_k.T @ error @ Vh_k.T
-                loss = torch.linalg.norm(projected_error)
+                loss = projected_error.pow(2).sum().sqrt()
 
             current_loss = loss.item()
             # Check if improvement exceeds threshold (supports rel/abs mode like PyTorch ReduceLROnPlateau)
