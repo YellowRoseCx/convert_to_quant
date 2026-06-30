@@ -451,7 +451,7 @@ class LearnedNVFP4Converter(BaseLearnedConverter):
                 current_dq = self._nvfp4_dequantize_blockwise(W_q_refined, current_total_scale, M, N)
                 error = current_dq - W_float32
                 projected_error = U_k.T @ error @ Vh_k.T
-                loss = torch.linalg.norm(projected_error)
+                loss = projected_error.pow(2).sum().sqrt()
 
             current_loss = loss.item()
 
@@ -611,7 +611,7 @@ class LearnedNVFP4Converter(BaseLearnedConverter):
 
             error = current_dq - W_float32
             projected_error = U_k.T @ error @ Vh_k.T
-            loss = torch.linalg.norm(projected_error)
+            loss = projected_error.pow(2).sum().sqrt()
 
             loss.backward()
             optimizer.step()
@@ -760,7 +760,7 @@ class LearnedNVFP4Converter(BaseLearnedConverter):
 
             error = current_dq - W_float32
             projected_error = U_k.T @ error @ Vh_k.T
-            loss = torch.linalg.norm(projected_error)
+            loss = projected_error.pow(2).sum().sqrt()
 
             loss.backward()
             optimizer.step()
@@ -907,7 +907,7 @@ class LearnedNVFP4Converter(BaseLearnedConverter):
 
             error = current_dq - W_float32
             projected_error = U_k.T @ error @ Vh_k.T
-            loss = torch.linalg.norm(projected_error)
+            loss = projected_error.pow(2).sum().sqrt()
 
             loss.backward()
             optimizer.step()

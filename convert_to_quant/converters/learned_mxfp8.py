@@ -385,7 +385,7 @@ class LearnedMXFP8Converter(BaseLearnedConverter):
                 current_dq = self._mxfp8_dequantize_blockwise(W_q_refined, current_block_scales_f32, M, N, discretize=False)
                 error = current_dq - W_float32
                 projected_error = U_k.T @ error @ Vh_k.T
-                loss = torch.linalg.norm(projected_error)
+                loss = projected_error.pow(2).sum().sqrt()
 
             current_loss = loss.item()
 
@@ -550,7 +550,7 @@ class LearnedMXFP8Converter(BaseLearnedConverter):
 
             error = current_dq - W_float32
             projected_error = U_k.T @ error @ Vh_k.T
-            loss = torch.linalg.norm(projected_error)
+            loss = projected_error.pow(2).sum().sqrt()
 
             loss.backward()
             optimizer.step()
@@ -703,7 +703,7 @@ class LearnedMXFP8Converter(BaseLearnedConverter):
 
             error = current_dq - W_float32
             projected_error = U_k.T @ error @ Vh_k.T
-            loss = torch.linalg.norm(projected_error)
+            loss = projected_error.pow(2).sum().sqrt()
 
             loss.backward()
             optimizer.step()
@@ -857,7 +857,7 @@ class LearnedMXFP8Converter(BaseLearnedConverter):
 
             error = current_dq - W_float32
             projected_error = U_k.T @ error @ Vh_k.T
-            loss = torch.linalg.norm(projected_error)
+            loss = projected_error.pow(2).sum().sqrt()
 
             loss.backward()
             optimizer.step()
