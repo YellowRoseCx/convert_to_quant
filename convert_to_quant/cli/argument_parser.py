@@ -61,6 +61,7 @@ ADVANCED_ARGS = {
     "early_stop_loss",
     "early_stop_lr",
     "early_stop_stall",
+    "cpu_svd",
     # NVFP4/MXFP8/INT8 scale optimization
     "scale_refinement_rounds",
     "scale_optimization",
@@ -370,7 +371,7 @@ class MultiHelpArgumentParser(argparse.ArgumentParser):
         print("Early Stopping Thresholds:")
         print("-" * 40)
 
-        early_args = ["early_stop_loss", "early_stop_lr", "early_stop_stall"]
+        early_args = ["early_stop_loss", "early_stop_lr", "early_stop_stall", "cpu_svd"]
         for action in self._all_actions:
             if self._get_dest_name(action) in early_args:
                 line = self._format_action_help(action)
