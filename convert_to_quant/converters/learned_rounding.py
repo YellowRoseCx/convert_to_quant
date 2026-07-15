@@ -916,8 +916,13 @@ class LearnedRoundingConverter(BaseLearnedConverter):
             if not self.no_learned_rounding and self.num_iter > 0 and self.convrot and self.scaling_mode == "row" and X_rot is not None:
                 verbose("    - Applying learned rounding optimization for INT4 (row-wise)...")
                 qdata_unpacked, scale = self._optimize_int4_adaround(W_float32, scale, X_rot, Y_ref)
+
             qdata = _pack_int4_row_major(qdata_unpacked)
             dequantized_weight = dequantize_signed_int4_rowwise(qdata, scale, output_dtype=COMPUTE_DTYPE)
+            del qdata_unpacked
+            import gc
+            gc.collect()
+
         else:
             if self.scaling_mode == "tensor":
                 # Global scale
