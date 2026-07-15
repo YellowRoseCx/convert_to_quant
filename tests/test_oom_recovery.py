@@ -16,9 +16,9 @@ def test_oom_recovery_and_calib_scale_shrinkage(monkeypatch):
         device=device
     )
 
-    # We want to mock _convert_int8_tensorwise so that the first call raises OutOfMemoryError,
+    # We want to mock _convert_int_tensorwise so that the first call raises OutOfMemoryError,
     # and the second call (after calib_scale shrinks to 0.5) succeeds.
-    original_convert_tensorwise = converter._convert_int8_tensorwise
+    original_convert_tensorwise = converter._convert_int_tensorwise
     call_count = 0
 
     def mock_convert_tensorwise(W_float32, calibration_data=None):
@@ -31,7 +31,7 @@ def test_oom_recovery_and_calib_scale_shrinkage(monkeypatch):
             # Succeed on subsequent tries
             return original_convert_tensorwise(W_float32, calibration_data=calibration_data)
 
-    monkeypatch.setattr(converter, "_convert_int8_tensorwise", mock_convert_tensorwise)
+    monkeypatch.setattr(converter, "_convert_int_tensorwise", mock_convert_tensorwise)
 
     # Set up some dummy weight and calibration data
     W_orig = torch.randn(64, 128, device=device, dtype=torch.float32)

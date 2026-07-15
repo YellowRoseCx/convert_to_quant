@@ -1363,8 +1363,19 @@ class LearnedRoundingConverter(BaseLearnedConverter):
         alpha = -torch.log((zeta - gamma) / (W_rest - gamma) - 1.0)
         V = torch.nn.Parameter(alpha)
 
-        optimizer = AdamW([V], lr=self.lr, weight_decay=0)
-        pbar = tqdm(range(self.num_iter), desc=f"  - Optimizing INT4 {self.scaling_mode} AdaRound", leave=False)
+
+        if self.optimizer_choice == "adamw":
+            optimizer = AdamW([V], lr=self.lr, weight_decay=0)
+        elif self.optimizer_choice == "radam":
+            optimizer = RAdam([V], lr=self.lr, weight_decay=0)
+        elif self.optimizer_choice == "prodigy":
+            from prodigyplus.prodigy_plus_schedulefree import ProdigyPlusScheduleFree
+            optimizer = ProdigyPlusScheduleFree([V], lr=self.lr, use_schedulefree=False, use_speed=self.use_speed)
+        else:
+            optimizer = AdamW([V], lr=self.lr, weight_decay=0) # Fallback if original is chosen
+
+        pbar = tqdm(range(self.num_iter), desc=f"  - Optimizing INT4 {self.scaling_mode} ({self.optimizer_choice})", leave=False)
+
 
         best_loss = float('inf')
         best_V = None
