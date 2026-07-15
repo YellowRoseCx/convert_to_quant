@@ -246,7 +246,7 @@ class MultiHelpArgumentParser(argparse.ArgumentParser):
         print("-" * 40)
 
         format_args = [
-            "int8", "nvfp4", "mxfp8", "convrot", "convrot_group_size", "dynamic_convrot", "make_hybrid_mxfp8", "tensor_scales_path", "fallback",
+            "int8", "int4", "sr", "nvfp4", "mxfp8", "convrot", "convrot_group_size", "dynamic_convrot", "make_hybrid_mxfp8", "tensor_scales_path", "fallback",
             "block_size", "scaling_mode"
         ]
         for action in self._all_actions:
@@ -515,7 +515,7 @@ class MultiHelpArgumentParser(argparse.ArgumentParser):
         formatter.add_text("  --help-learned, -hl         Show learned rounding optimization options")
         formatter.add_text("                              (optimizer, num_iter, lr, top_p, etc.)")
         formatter.add_text("  --help-experimental, -he    Show experimental quantization options")
-        formatter.add_text("                              (int8, nvfp4, mxfp8, custom-layers, etc.)")
+        formatter.add_text("                              (int8, int4, nvfp4, mxfp8, custom-layers, etc.)")
         formatter.add_text("  --help-filters, -hf         Show model-specific exclusion filters")
         formatter.add_text("                              (t5xxl, hunyuan, wan, qwen, etc.)")
         formatter.add_text("  --help-advanced, -ha        Show advanced LR tuning and early stopping")
