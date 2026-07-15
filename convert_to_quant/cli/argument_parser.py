@@ -16,6 +16,7 @@ from ..constants import MODEL_FILTERS
 EXPERIMENTAL_ARGS = {
     "int8",
     "nvfp4",
+    "int4",
     "mxfp8",
     "make_hybrid_mxfp8",
     "tensor_scales_path",

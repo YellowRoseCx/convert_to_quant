@@ -66,6 +66,8 @@ def convert_to_fp8_scaled(
     seed: int,
     calib_cpu: bool = False,
     int8: bool = False,
+    int4: bool = False,
+    sr: int = 0,
     primary_format: Optional[str] = None,  # Override: "nvfp4", "mxfp8", or None (use int8 flag)
     fallback: Optional[str] = None,
     custom_layers: Optional[str] = None,
@@ -110,6 +112,9 @@ def convert_to_fp8_scaled(
     if primary_format:
         target_format = primary_format
         format_name = primary_format.upper()
+    elif int4:
+        target_format = "int4"
+        format_name = "INT4"
     elif int8:
         target_format = "int8"
         format_name = "INT8"
@@ -119,7 +124,9 @@ def convert_to_fp8_scaled(
 
     info(f"Processing: {input_file}\nOutput will be saved to: {output_file}")
     info("-" * 60)
-    if int8:
+    if int4:
+        info("Target format: INT4 (ConvRot row-wise quantization)")
+    elif int8:
         scaling_mode = converter_kwargs.get("scaling_mode", "block")
         if scaling_mode == "row":
             info("Target format: INT8 (row-wise quantization)")
@@ -196,7 +203,7 @@ def convert_to_fp8_scaled(
 
     # Get format-aware block_size default (converters handle their own fixed sizes)
     # This is only used for metadata/display; converters use their __init__ defaults
-    format_block_sizes = {"nvfp4": 16, "mxfp8": 32, "int8": 128, "fp8": 64}
+    format_block_sizes = {"nvfp4": 16, "mxfp8": 32, "int4": 128, "int8": 128, "fp8": 64}
     block_size = converter_kwargs.get("block_size") or format_block_sizes.get(target_format, 64)
 
     # Helper function to create converter for a specific format type
@@ -238,6 +245,10 @@ def convert_to_fp8_scaled(
             "int8": {
                 "dtype": TARGET_INT8_DTYPE,
                 "name": "INT8"
+            },
+            "int4": {
+                "dtype": torch.uint8,
+                "name": "INT4"
             },
             "fp8": {
                 "dtype": TARGET_FP8_DTYPE,
@@ -387,6 +398,8 @@ def convert_to_fp8_scaled(
                 fmt = layer_settings["format"]
                 if fmt.startswith("float8"):
                     layer_format = "fp8"
+                elif fmt.startswith("int4"):
+                    layer_format = "int4"
                 elif fmt.startswith("int8"):
                     layer_format = "int8"
                 else:
@@ -488,6 +501,7 @@ def convert_to_fp8_scaled(
             converter = converters["primary"]
 
         # Determine format type for this layer
+        is_int4 = layer_format == "int4"
         is_int8 = layer_format == "int8"
         is_mxfp8 = layer_format == "mxfp8"
         is_nvfp4 = layer_format == "nvfp4"
@@ -598,6 +612,22 @@ def convert_to_fp8_scaled(
                     "nvfp4", block_size=16,
                     full_precision_matrix_mult=layer_full_precision_mm if layer_full_precision_mm else None
                 )
+
+            elif is_int4:
+                new_tensors[f"{base_name}.weight_scale"] = dequant_s.to(device="cpu", dtype=SCALE_DTYPE).detach().clone()
+                comfy_quant_format = "convrot_w4a4_sr" if sr > 0 else "convrot_w4a4"
+                block_size_for_meta = None
+                per_row = True
+
+                comfy_quant_tensor = create_comfy_quant_tensor(
+                    comfy_quant_format, block_size=None,
+                    full_precision_matrix_mult=layer_full_precision_mm if layer_full_precision_mm else None,
+                    convrot=None, convrot_groupsize=convrot_group_size,
+                    per_row=None
+                )
+
+                # In ggufy we need quant_group_size: 64 and linear_dtype: int4 as well. Wait, create_comfy_quant_tensor might not support custom keys.
+                # I will edit comfy_quant_tensor metadata dict directly below, or just pass it inside.
             elif is_int8:
                 new_tensors[f"{base_name}.weight_scale"] = dequant_s.to(device="cpu", dtype=SCALE_DTYPE).detach().clone()
                 if converter.scaling_mode in ("tensor", "row"):
@@ -616,6 +646,15 @@ def convert_to_fp8_scaled(
                     convrot=convrot_applied, convrot_groupsize=convrot_group_size if convrot_applied else None,
                     per_row=per_row if converter.scaling_mode == "row" else None
                 )
+                if is_int4:
+                    from ..utils.tensor_utils import tensor_to_dict, dict_to_tensor
+                    cq_dict = tensor_to_dict(comfy_quant_tensor)
+                    cq_dict["quant_group_size"] = 64
+                    cq_dict["linear_dtype"] = "int4"
+                    cq_dict["convrot_groupsize"] = convrot_group_size
+                    if sr > 0:
+                        cq_dict["stochastic_rounding"] = sr
+                    comfy_quant_tensor = dict_to_tensor(cq_dict)
                 # Add input_scale only for block-wise INT8 (dynamic quantization for rowwise doesn't use it)
                 if comfy_quant_format == "int8_blockwise":
                     new_tensors[f"{base_name}.input_scale"] = torch.tensor(1.0, dtype=torch.float32, device="cpu")
@@ -832,7 +871,7 @@ def convert_to_fp8_scaled(
 
     # Add scaled_fp8 marker only for legacy non-comfy_quant FP8 format
     # Use empty((0)) when input_scale is present (t5xxl, mistral, or --input_scale flag)
-    if not comfy_quant and not int8 and not custom_layers and "scaled_fp8" not in new_tensors:
+    if not comfy_quant and not int8 and not int4 and not custom_layers and "scaled_fp8" not in new_tensors:
         has_text_encoder_filter = filter_flags.get("t5xxl") or filter_flags.get("mistral") or filter_flags.get("visual")
         new_tensors["scaled_fp8"] = torch.empty(
             (0), dtype=TARGET_FP8_DTYPE

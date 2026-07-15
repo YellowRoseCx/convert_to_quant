@@ -970,7 +970,7 @@ def run_conversion(args):
         args.comfy_quant = True
 
     # Only check FP8 support if not using INT8
-    if not args.int8:
+    if not args.int8 and not args.int4:
         try:
             _ = torch.zeros(1, dtype=TARGET_FP8_DTYPE, device="cuda" if torch.cuda.is_available() else "cpu")
         except (RuntimeError, TypeError):
@@ -990,6 +990,11 @@ def run_conversion(args):
                 scaling_str = "_rowwise"
             else:
                 scaling_str = f"_bs{args.block_size}"
+        elif args.int4:
+            format_str = "int4"
+            scaling_str = "_convrot_rowwise"
+            if args.sr > 0:
+                format_str += "_sr"
         else:
             format_str = "fp8"
             scaling_str = f"_{args.scaling_mode}"
@@ -1039,6 +1044,8 @@ def run_conversion(args):
         seed=seed,
         # Format options
         int8=args.int8,
+        int4=args.int4,
+        sr=args.sr,
         primary_format=primary_format,
         fallback=args.fallback,
         # Custom layer options

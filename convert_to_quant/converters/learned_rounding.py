@@ -1,3 +1,4 @@
+from ..utils.int4_utils import _pack_int4_row_major, _round_int4, quantize_signed_int4_rowwise, dequantize_signed_int4_rowwise
 """
 Learned rounding converter for FP8 and INT8 quantization.
 
@@ -50,7 +51,7 @@ class LearnedRoundingConverter(BaseLearnedConverter):
         self,
         scaling_mode: str = "tensor",
         block_size: int = 64,
-        target_format: str = "fp8",
+        target_format: str = "fp8", sr: int = 0,
         lr: float = 1.0,
         extract_lora: bool = False,
         lora_rank: int = 32,
@@ -82,6 +83,7 @@ class LearnedRoundingConverter(BaseLearnedConverter):
 
         self.block_size = block_size
         self.target_format = target_format
+        self.sr = sr
         self.convrot = convrot
         self.convrot_group_size = convrot_group_size
         self.dynamic_convrot = dynamic_convrot
@@ -91,7 +93,7 @@ class LearnedRoundingConverter(BaseLearnedConverter):
         self.has_bias = True
 
         # INT8 defaults to block-wise scaling, but allows tensor-wise and row-wise
-        if target_format == "int8" and scaling_mode not in ("tensor", "row", "block"):
+        if target_format in ("int8", "int4") and scaling_mode not in ("tensor", "row", "block"):
             scaling_mode = "block"
         # Normalize block3d alias to block
         if scaling_mode == "block3d":
@@ -99,13 +101,13 @@ class LearnedRoundingConverter(BaseLearnedConverter):
         self.scaling_mode = scaling_mode
 
         # Check ConvRot validity
-        if self.convrot and not (self.target_format == "int8" and self.scaling_mode == "row"):
+        if self.convrot and not (self.target_format in ("int8", "int4") and self.scaling_mode == "row"):
             verbose("  - WARNING: ConvRot is currently only supported for INT8 row-wise quantization. It will be ignored.")
             self.convrot = False
             self.dynamic_convrot = False
 
         # Set format-specific max values and dtype
-        if self.target_format == "int8":
+        if self.target_format in ("int8", "int4"):
             self.target_dtype = TARGET_INT8_DTYPE
             self.f8_max_val = None
         else:
@@ -721,7 +723,7 @@ class LearnedRoundingConverter(BaseLearnedConverter):
                         return quantized_tensor, dequant_scale, torch.zeros_like(W_float32), {}
 
                     # INT8 quantization path
-                    if self.target_format == "int8":
+                    if self.target_format in ("int8", "int4"):
                         if self.scaling_mode in ("tensor", "row"):
                             qdata, scale, dequantized = self._convert_int8_tensorwise(
                                 W_float32, calibration_data=calibration_data
@@ -903,51 +905,65 @@ class LearnedRoundingConverter(BaseLearnedConverter):
 
         # Initial quantization
         # We need to manually handle tensor-wise vs row-wise if auto-quantizing
-        if self.scaling_mode == "tensor":
-            # Global scale
-            w_max = W_float32.abs().max()
-            dequant_scale = w_max.clamp_min(1e-12) / 127.0
-            # Pass the pre-computed scale to quantize
-            qdata, layout_params = TensorWiseINT8Layout.quantize(W_float32, scale=dequant_scale, is_weight=True)
-            scale = dequant_scale
+        is_int4 = self.target_format == "int4"
+        if is_int4:
+            M = W_float32.shape[0]
+            absmax = W_float32.abs().amax(dim=-1, keepdim=True).clamp(min=1e-10)
+            scale = absmax / 7.0
+            qdata_unpacked = _round_int4(W_float32 / scale, stochastic_rounding=self.sr)
+            scale = scale.reshape(M).to(torch.float32)
+            if not self.no_learned_rounding and self.num_iter > 0 and self.convrot and self.scaling_mode == "row" and X_rot is not None:
+                verbose("    - Applying learned rounding optimization for INT4 (row-wise)...")
+                qdata_unpacked, scale = self._optimize_int4_adaround(W_float32, scale, X_rot, Y_ref)
+            qdata = _pack_int4_row_major(qdata_unpacked)
+            from ..utils.int4_utils import dequantize_signed_int4_rowwise
+            dequantized_weight = dequantize_signed_int4_rowwise(qdata, scale, output_dtype=COMPUTE_DTYPE)
         else:
-            # Row-wise (default for TensorWiseINT8Layout if is_weight=True)
-            qdata, layout_params = TensorWiseINT8Layout.quantize(W_float32, is_weight=True)
-            scale = layout_params["scale"]
-
-        # Optional: Apply learned rounding optimization for INT8
-        if not self.no_learned_rounding and self.num_iter > 0:
-            verbose(f"    - Applying learned rounding optimization for INT8 ({self.scaling_mode}-wise)...")
             if self.scaling_mode == "tensor":
-                qdata, scale = self._optimize_int8_tensorwise_learned_rounding(W_float32, qdata, scale)
-            elif self.convrot and self.scaling_mode == "row" and X_rot is not None:
-                if self.scale_optimization == "dualround":
-                    verbose("    - Scale Optimization: DUALROUND (Pass 1)")
-                    qdata, scale = self._optimize_int8_adaround(W_float32, qdata, scale, X_rot, Y_ref)
-
-                    # Scale Re-Estimation
-                    verbose("    - Scale Optimization: Re-estimating scales based on Pass 1 output...")
-                    dequant_opt = TensorWiseINT8Layout.dequantize(qdata, scale, orig_dtype=COMPUTE_DTYPE)
-                    row_max_opt = dequant_opt.abs().amax(dim=1, keepdim=True)
-                    scale_opt = row_max_opt.clamp_min(1e-12) / 127.0
-                    qdata, _ = TensorWiseINT8Layout.quantize(W_float32, scale=scale_opt, is_weight=True)
-                    scale = scale_opt.squeeze(1) if scale.dim() == 1 else scale_opt
-
-                    # Clean up Pass 1 intermediate tensors immediately to prevent VRAM accumulation
-                    del dequant_opt, row_max_opt, scale_opt
-                    gc.collect()
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
-
-                    verbose("    - Scale Optimization: DUALROUND (Pass 2)")
-                    qdata, scale = self._optimize_int8_adaround(W_float32, qdata, scale, X_rot, Y_ref)
-                else:
-                    qdata, scale = self._optimize_int8_adaround(W_float32, qdata, scale, X_rot, Y_ref)
+                # Global scale
+                w_max = W_float32.abs().max()
+                dequant_scale = w_max.clamp_min(1e-12) / 127.0
+                # Pass the pre-computed scale to quantize
+                qdata, layout_params = TensorWiseINT8Layout.quantize(W_float32, scale=dequant_scale, is_weight=True)
+                scale = dequant_scale
             else:
-                qdata, scale = self._optimize_int8_learned_rounding(W_float32, qdata, scale, scaling_mode="row")
+                # Row-wise (default for TensorWiseINT8Layout if is_weight=True)
+                qdata, layout_params = TensorWiseINT8Layout.quantize(W_float32, is_weight=True)
+                scale = layout_params["scale"]
 
-        # Dequantize for bias correction
-        dequantized_weight = TensorWiseINT8Layout.dequantize(qdata, scale, orig_dtype=COMPUTE_DTYPE)
+            # Optional: Apply learned rounding optimization for INT8
+            if not self.no_learned_rounding and self.num_iter > 0:
+                verbose(f"    - Applying learned rounding optimization for INT8 ({self.scaling_mode}-wise)...")
+                if self.scaling_mode == "tensor":
+                    qdata, scale = self._optimize_int8_tensorwise_learned_rounding(W_float32, qdata, scale)
+                elif self.convrot and self.scaling_mode == "row" and X_rot is not None:
+                    if self.scale_optimization == "dualround":
+                        verbose("    - Scale Optimization: DUALROUND (Pass 1)")
+                        qdata, scale = self._optimize_int8_adaround(W_float32, qdata, scale, X_rot, Y_ref)
+
+                        # Scale Re-Estimation
+                        verbose("    - Scale Optimization: Re-estimating scales based on Pass 1 output...")
+                        dequant_opt = TensorWiseINT8Layout.dequantize(qdata, scale, orig_dtype=COMPUTE_DTYPE)
+                        row_max_opt = dequant_opt.abs().amax(dim=1, keepdim=True)
+                        scale_opt = row_max_opt.clamp_min(1e-12) / 127.0
+                        qdata, _ = TensorWiseINT8Layout.quantize(W_float32, scale=scale_opt, is_weight=True)
+                        scale = scale_opt.squeeze(1) if scale.dim() == 1 else scale_opt
+
+                        # Clean up Pass 1 intermediate tensors immediately to prevent VRAM accumulation
+                        del dequant_opt, row_max_opt, scale_opt
+                        gc.collect()
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+
+                        verbose("    - Scale Optimization: DUALROUND (Pass 2)")
+                        qdata, scale = self._optimize_int8_adaround(W_float32, qdata, scale, X_rot, Y_ref)
+                    else:
+                        qdata, scale = self._optimize_int8_adaround(W_float32, qdata, scale, X_rot, Y_ref)
+                else:
+                    qdata, scale = self._optimize_int8_learned_rounding(W_float32, qdata, scale, scaling_mode="row")
+
+            # Dequantize for bias correction
+            dequantized_weight = TensorWiseINT8Layout.dequantize(qdata, scale, orig_dtype=COMPUTE_DTYPE)
 
         # Phase 4: Residual Bias Calibration
         if self.has_bias and self.convrot and self.scaling_mode == "row" and X_rot is not None and Y_ref is not None:
@@ -1331,6 +1347,68 @@ class LearnedRoundingConverter(BaseLearnedConverter):
             torch.cuda.empty_cache()
 
         return final_qdata, scale
+
+
+    def _optimize_int4_adaround(
+        self, W_float32: torch.Tensor, scale: torch.Tensor, X: torch.Tensor, Y_ref: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """INT4 specific optimization."""
+        M, N = W_float32.shape
+        # Initialize continuous variables for rounding V
+        W_scaled = W_float32 / scale.reshape(M, 1)
+        W_floor = W_scaled.floor()
+        W_rest = W_scaled - W_floor
+
+        # AdaRound logic but with INT4 bounds [-7, 7]
+        zeta = 1.1
+        gamma = -0.1
+        alpha = -torch.log((zeta - gamma) / (W_rest - gamma) - 1.0)
+        V = torch.nn.Parameter(alpha)
+
+        optimizer = AdamW([V], lr=self.lr, weight_decay=0)
+        pbar = tqdm(range(self.num_iter), desc=f"  - Optimizing INT4 {self.scaling_mode} AdaRound", leave=False)
+
+        best_loss = float('inf')
+        best_V = None
+
+        reg_param = 0.01
+
+        for i in pbar:
+            optimizer.zero_grad()
+
+            # Compute relaxed rounding
+            h_v = torch.sigmoid(V)
+            v_rect = h_v * (zeta - gamma) + gamma
+            v_rect = torch.clamp(v_rect, 0, 1)
+
+            W_q = W_floor + v_rect
+            W_q_clamped = torch.clamp(W_q, -7, 7)
+            W_dequant = W_q_clamped * scale.reshape(M, 1)
+
+            Y_quant = X @ W_dequant.T
+            loss_mse = torch.nn.functional.mse_loss(Y_quant, Y_ref)
+
+            # Regularization to push v_rect towards 0 or 1
+            beta = 20 if i < self.num_iter * 0.2 else 2
+            reg = torch.sum(1 - torch.pow(torch.abs(2 * v_rect - 1), beta))
+            loss = loss_mse + reg_param * reg
+
+            loss.backward()
+            optimizer.step()
+
+            current_loss = loss.item()
+            if current_loss < best_loss:
+                best_loss = current_loss
+                best_V = V.data.clone()
+
+        # Final exact rounding
+        with torch.no_grad():
+            V.data.copy_(best_V)
+            h_v = torch.sigmoid(V)
+            W_q = W_floor + (h_v >= 0.5).float()
+            W_q_clamped = torch.clamp(W_q, -7, 7).to(torch.int8)
+
+        return W_q_clamped, scale
 
     def _optimize_int8_learned_rounding(
         self, W_float32: torch.Tensor, qdata: torch.Tensor, scale: torch.Tensor, scaling_mode: str = "block"
