@@ -1,0 +1,3 @@
+[submodule "ggufy"]
+	path = ggufy
+	url = https://github.com/qskousen/ggufy
