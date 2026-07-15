@@ -131,6 +131,8 @@ def get_parser() -> MultiHelpArgumentParser:
     parser.add_argument(
         "--comfy_quant", "--comfy-quant", action="store_true", dest="comfy_quant", help="Use Comfy quantization method."
     )
+    parser.add_argument("--int4", action="store_true", help="Convert model to INT4 ConvRot format. (Always uses ConvRot and row-wise scaling)")
+    parser.add_argument("--sr", type=int, default=0, metavar="SEED", help="Enable INT4 Stochastic Rounding with the given seed. Default is 0 (deterministic).")
     parser.add_argument("--int8", action="store_true", help="Use INT8 block-wise quantization instead of FP8.")
     parser.add_argument(
         "--convrot", action="store_true",

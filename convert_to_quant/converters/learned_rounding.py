@@ -1,4 +1,3 @@
-from ..utils.int4_utils import _pack_int4_row_major, _round_int4, quantize_signed_int4_rowwise, dequantize_signed_int4_rowwise
 """
 Learned rounding converter for FP8 and INT8 quantization.
 
@@ -31,6 +30,7 @@ from ..constants import (
     TARGET_INT8_DTYPE,
 )
 from ..pinned_transfer import transfer_to_gpu_pinned
+from ..utils.int4_utils import _pack_int4_row_major, _round_int4, quantize_signed_int4_rowwise, dequantize_signed_int4_rowwise
 from ..utils.logging import (
     debug,
     info,
@@ -51,7 +51,8 @@ class LearnedRoundingConverter(BaseLearnedConverter):
         self,
         scaling_mode: str = "tensor",
         block_size: int = 64,
-        target_format: str = "fp8", sr: int = 0,
+        target_format: str = "fp8",
+        sr: int = 0,
         lr: float = 1.0,
         extract_lora: bool = False,
         lora_rank: int = 32,
@@ -136,7 +137,7 @@ class LearnedRoundingConverter(BaseLearnedConverter):
         """FP8 optimization using AdamW optimizer with manual LR scheduling."""
         M, N = W_float32.shape
         W_scaled = W_float32 * scale
-        if self.target_format == "int8":
+        if self.target_format in ("int8", "int4"):
             W_rounded = W_scaled.round().to(self.target_dtype).to(COMPUTE_DTYPE)
         else:
             W_rounded = W_scaled.to(self.target_dtype).to(COMPUTE_DTYPE)
@@ -259,7 +260,7 @@ class LearnedRoundingConverter(BaseLearnedConverter):
         """FP8 optimization using RAdam optimizer with manual LR scheduling."""
         M, N = W_float32.shape
         W_scaled = W_float32 * scale
-        if self.target_format == "int8":
+        if self.target_format in ("int8", "int4"):
             W_rounded = W_scaled.round().to(self.target_dtype).to(COMPUTE_DTYPE)
         else:
             W_rounded = W_scaled.to(self.target_dtype).to(COMPUTE_DTYPE)
@@ -386,7 +387,7 @@ class LearnedRoundingConverter(BaseLearnedConverter):
 
         M, N = W_float32.shape
         W_scaled = W_float32 * scale
-        if self.target_format == "int8":
+        if self.target_format in ("int8", "int4"):
             W_rounded = W_scaled.round().to(self.target_dtype).to(COMPUTE_DTYPE)
         else:
             W_rounded = W_scaled.to(self.target_dtype).to(COMPUTE_DTYPE)
@@ -509,7 +510,7 @@ class LearnedRoundingConverter(BaseLearnedConverter):
         self, W_float32: torch.Tensor, scale: torch.Tensor, U_k: torch.Tensor, Vh_k: torch.Tensor
     ) -> torch.Tensor:
         W_scaled = W_float32 * scale
-        if self.target_format == "int8":
+        if self.target_format in ("int8", "int4"):
             W_rounded = W_scaled.round().to(self.target_dtype).to(COMPUTE_DTYPE)
         else:
             W_rounded = W_scaled.to(self.target_dtype).to(COMPUTE_DTYPE)
@@ -695,7 +696,7 @@ class LearnedRoundingConverter(BaseLearnedConverter):
                         if W_float32.ndim == 2:
                             out_features, in_features = W_float32.shape
 
-                            if self.target_format == "int8":
+                            if self.target_format in ("int8", "int4"):
                                 # INT8 uses 2D block scaling (M//block_size, N//block_size)
                                 num_blocks_m = out_features // self.block_size
                                 num_blocks_n = in_features // self.block_size
@@ -725,7 +726,7 @@ class LearnedRoundingConverter(BaseLearnedConverter):
                     # INT8 quantization path
                     if self.target_format in ("int8", "int4"):
                         if self.scaling_mode in ("tensor", "row"):
-                            qdata, scale, dequantized = self._convert_int8_tensorwise(
+                            qdata, scale, dequantized = self._convert_int_tensorwise(
                                 W_float32, calibration_data=calibration_data
                             )
                         else:
@@ -853,7 +854,7 @@ class LearnedRoundingConverter(BaseLearnedConverter):
 
         return (qdata, scale.to(device=self.device, dtype=SCALE_DTYPE), dequantized_weight)
 
-    def _convert_int8_tensorwise(
+    def _convert_int_tensorwise(
         self, W_float32: torch.Tensor, calibration_data: Optional[torch.Tensor] = None
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
@@ -916,7 +917,6 @@ class LearnedRoundingConverter(BaseLearnedConverter):
                 verbose("    - Applying learned rounding optimization for INT4 (row-wise)...")
                 qdata_unpacked, scale = self._optimize_int4_adaround(W_float32, scale, X_rot, Y_ref)
             qdata = _pack_int4_row_major(qdata_unpacked)
-            from ..utils.int4_utils import dequantize_signed_int4_rowwise
             dequantized_weight = dequantize_signed_int4_rowwise(qdata, scale, output_dtype=COMPUTE_DTYPE)
         else:
             if self.scaling_mode == "tensor":
@@ -1354,12 +1354,10 @@ class LearnedRoundingConverter(BaseLearnedConverter):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """INT4 specific optimization."""
         M, N = W_float32.shape
-        # Initialize continuous variables for rounding V
         W_scaled = W_float32 / scale.reshape(M, 1)
         W_floor = W_scaled.floor()
         W_rest = W_scaled - W_floor
 
-        # AdaRound logic but with INT4 bounds [-7, 7]
         zeta = 1.1
         gamma = -0.1
         alpha = -torch.log((zeta - gamma) / (W_rest - gamma) - 1.0)
@@ -1370,13 +1368,10 @@ class LearnedRoundingConverter(BaseLearnedConverter):
 
         best_loss = float('inf')
         best_V = None
-
         reg_param = 0.01
 
         for i in pbar:
             optimizer.zero_grad()
-
-            # Compute relaxed rounding
             h_v = torch.sigmoid(V)
             v_rect = h_v * (zeta - gamma) + gamma
             v_rect = torch.clamp(v_rect, 0, 1)
@@ -1388,7 +1383,6 @@ class LearnedRoundingConverter(BaseLearnedConverter):
             Y_quant = X @ W_dequant.T
             loss_mse = torch.nn.functional.mse_loss(Y_quant, Y_ref)
 
-            # Regularization to push v_rect towards 0 or 1
             beta = 20 if i < self.num_iter * 0.2 else 2
             reg = torch.sum(1 - torch.pow(torch.abs(2 * v_rect - 1), beta))
             loss = loss_mse + reg_param * reg
@@ -1396,12 +1390,10 @@ class LearnedRoundingConverter(BaseLearnedConverter):
             loss.backward()
             optimizer.step()
 
-            current_loss = loss.item()
-            if current_loss < best_loss:
-                best_loss = current_loss
+            if loss.item() < best_loss:
+                best_loss = loss.item()
                 best_V = V.data.clone()
 
-        # Final exact rounding
         with torch.no_grad():
             V.data.copy_(best_V)
             h_v = torch.sigmoid(V)

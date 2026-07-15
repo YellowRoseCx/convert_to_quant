@@ -625,9 +625,6 @@ def convert_to_fp8_scaled(
                     convrot=None, convrot_groupsize=convrot_group_size,
                     per_row=None
                 )
-
-                # In ggufy we need quant_group_size: 64 and linear_dtype: int4 as well. Wait, create_comfy_quant_tensor might not support custom keys.
-                # I will edit comfy_quant_tensor metadata dict directly below, or just pass it inside.
             elif is_int8:
                 new_tensors[f"{base_name}.weight_scale"] = dequant_s.to(device="cpu", dtype=SCALE_DTYPE).detach().clone()
                 if converter.scaling_mode in ("tensor", "row"):
